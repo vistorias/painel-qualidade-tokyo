@@ -1323,28 +1323,35 @@ if not fast_mode:
 st.markdown("---")
 st.markdown('<div class="section">🏁 Top 5 melhores × piores (por % de erro)</div>', unsafe_allow_html=True)
 
-rank = (base.copy())
-rank = rank[den > 0].replace({np.inf: np.nan}).dropna(subset=["%ERRO"])
+rank = base.copy()
 
+# escolha do denominador coerente com o rádio
 den_col = "liq" if denom_mode.startswith("Líquida") else "vist"
-col_titulo_den = "vistórias líquidas" if den_col == "liq" else "vistórias"
-cols_rank = ["VISTORIADOR", den_col, "erros", "%ERRO", "%ERRO_GG"]
-rank_view = rank[cols_rank].rename(columns={den_col: col_titulo_den})
+rank = rank[rank[den_col] > 0].replace({np.inf: np.nan}).dropna(subset=["%ERRO"])
 
-for c in [col_titulo_den, "erros"]:
-    if c in rank_view.columns: rank_view[c] = rank_view[c].astype(int)
-for c in ["%ERRO", "%ERRO_GG"]:
-    if c in rank_view.columns: rank_view[c] = rank_view[c].map(lambda x: f"{x:.1f}%" if pd.notna(x) else "—")
+col_titulo_den = "vistorias líquidas" if den_col == "liq" else "vistorias"
+cols_rank = ["VISTORIADOR", den_col, "erros", "%ERRO", "%ERRO_GG"]
+
+# ordene usando a coluna numérica %ERRO (sem formatação)
+best5_num  = rank.sort_values("%ERRO", ascending=True).head(5)[cols_rank].rename(columns={den_col: col_titulo_den})
+worst5_num = rank.sort_values("%ERRO", ascending=False).head(5)[cols_rank].rename(columns={den_col: col_titulo_den})
+
+# formatação APÓS a ordenação
+def _fmt(df):
+    out = df.copy()
+    for c in [col_titulo_den, "erros"]:
+        if c in out.columns: out[c] = out[c].astype(int)
+    for c in ["%ERRO", "%ERRO_GG"]:
+        if c in out.columns: out[c] = out[c].map(lambda x: f"{x:.1f}%".replace(".", ",") if pd.notna(x) else "—")
+    return out.reset_index(drop=True)
 
 c_best, c_worst = st.columns(2)
 with c_best:
-    best5  = rank_view.sort_values("%ERRO", ascending=True).head(5)
     st.subheader("🏆 Top 5 melhores (menor %Erro)")
-    st.dataframe(best5.reset_index(drop=True), use_container_width=True, hide_index=True)
+    st.dataframe(_fmt(best5_num), use_container_width=True, hide_index=True)
 with c_worst:
-    worst5 = rank_view.sort_values("%ERRO", ascending=False).head(5)
     st.subheader("⚠️ Top 5 piores (maior %Erro)")
-    st.dataframe(worst5.reset_index(drop=True), use_container_width=True, hide_index=True)
+    st.dataframe(_fmt(worst5_num), use_container_width=True, hide_index=True)
 
 # ------------------ FRAUDE ------------------
 st.markdown("---")
@@ -1360,5 +1367,6 @@ else:
     df_fraude = df_fraude[cols_fraude].sort_values(["DATA","UNIDADE","VISTORIADOR"])
     st.dataframe(df_fraude, use_container_width=True, hide_index=True)
     st.caption('<div class="table-note">* Somente linhas cujo **ERRO** é exatamente “TENTATIVA DE FRAUDE”.</div>', unsafe_allow_html=True)
+
 
 
