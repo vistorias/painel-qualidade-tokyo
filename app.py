@@ -165,14 +165,27 @@ def business_days_count(dini: date, dfim: date) -> int:
 
 # ---- slider seguro (impede valores fora do range no session_state) ----
 def safe_slider_int(label, key, min_value, max_value, default, step=1):
+    mi = int(min_value)
+    ma = int(max_value)
+    stp = max(1, int(step))
+
+    # Caso degenerado: range sem largura (ex.: 1..1) → não usar slider
+    if ma <= mi:
+        val = mi
+        st.session_state[key] = val  # mantém consistente entre reruns
+        # Mostra o valor “fixo” para o usuário
+        st.caption(f"**{label}:** {val}")
+        return val
+
+    # Normaliza o valor vindo do session_state
     raw = st.session_state.get(key, default)
     try:
         cur = int(raw)
     except Exception:
         cur = int(default)
-    cur = int(max(min_value, min(max_value, cur)))
-    return st.slider(label, min_value=int(min_value), max_value=int(max_value),
-                     value=int(cur), step=int(step), key=key)
+
+    cur = int(max(mi, min(ma, cur)))
+    return st.slider(label, min_value=mi, max_value=ma, value=cur, step=stp, key=key)
 
 
 # ------------------ LEITURA DOS ÍNDICES (com cache) ------------------
@@ -1518,3 +1531,4 @@ else:
     df_fraude = df_fraude[cols_fraude].sort_values(["DATA","UNIDADE","VISTORIADOR"])
     st.dataframe(df_fraude, use_container_width=True, hide_index=True)
     st.caption('<div class="table-note">* Somente linhas cujo **ERRO** é exatamente “TENTATIVA DE FRAUDE”.</div>', unsafe_allow_html=True)
+
