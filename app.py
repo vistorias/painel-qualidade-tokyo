@@ -163,6 +163,17 @@ def business_days_count(dini: date, dfim: date) -> int:
         return 0
     return len(pd.bdate_range(dini, dfim))
 
+# ---- slider seguro (impede valores fora do range no session_state) ----
+def safe_slider_int(label, key, min_value, max_value, default, step=1):
+    raw = st.session_state.get(key, default)
+    try:
+        cur = int(raw)
+    except Exception:
+        cur = int(default)
+    cur = int(max(min_value, min(max_value, cur)))
+    return st.slider(label, min_value=int(min_value), max_value=int(max_value),
+                     value=int(cur), step=int(step), key=key)
+
 
 # ------------------ LEITURA DOS ÍNDICES (com cache) ------------------
 @st.cache_data(ttl=300, show_spinner=False)
@@ -517,7 +528,7 @@ mtd_all = dfQ[mask_mtd].copy()
 if "UNIDADE" in mtd_all.columns and len(f_unids):
     mtd_all = mtd_all[mtd_all["UNIDADE"].isin([_upper(u) for u in f_unids])]
 if "VISTORIADOR" in mtd_all.columns and len(f_vists):
-    mtd_all = mtd_all[mtd_all["VISTORIADOR"].isin([_upper(v) for v in f_vists])]
+    mtd_all = mtd_all[mtd_all["VISTORIADOR"].isin([_upper(v) for u in f_vists])]
 
 erros_mtd_total = int(len(mtd_all))
 erros_mtd_gg = int(mtd_all["GRAVIDADE"].isin(grav_gg).sum()) if "GRAVIDADE" in mtd_all.columns else 0
@@ -828,15 +839,16 @@ if not fast_mode:
         if n_err == 0:
             st.info("Sem dados para montar o Pareto no período/filtros atuais.")
         else:
-            max_cats = min(30, n_err)
+            max_cats = int(min(30, n_err))
             if max_cats < 1:
                 st.info("Sem categorias suficientes para montar o Pareto.")
             else:
                 top_default = min(10, max_cats)
-                top_cats = st.slider(
+                # ↓↓↓ slider seguro
+                top_cats = safe_slider_int(
                     "Categorias no Pareto",
-                    min_value=1, max_value=max_cats, value=top_default,
-                    step=1, key=f"pareto_cats_{ref_year}{ref_month}",
+                    key=f"pareto_cats_{ref_year}{ref_month}",
+                    min_value=1, max_value=max_cats, default=top_default, step=1
                 )
 
                 pareto = (
@@ -886,15 +898,17 @@ if not fast_mode:
                     st.altair_chart(chart_pareto, use_container_width=True)
 
                     max_topN = int(len(pareto))
-                    topN_sim = st.slider(
+                    # ↓↓↓ slider seguro
+                    topN_sim = safe_slider_int(
                         "Quantos erros do topo considerar?",
-                        min_value=1, max_value=max_topN, value=min(8, max_topN),
                         key=f"pareto_topN_{ref_year}{ref_month}",
+                        min_value=1, max_value=max_topN, default=min(8, max_topN), step=1
                     )
-                    reducao = st.slider(
+                    # ↓↓↓ slider seguro (range fixo mas padronizamos)
+                    reducao = safe_slider_int(
                         "Redução esperada nesses erros (%)",
-                        min_value=0, max_value=100, value=25,
                         key=f"pareto_reducao_{ref_year}{ref_month}",
+                        min_value=0, max_value=100, default=25, step=1
                     )
 
                     idx = min(topN_sim, max_topN) - 1
@@ -1082,7 +1096,7 @@ for c in ["vist","rev","liq","erros","erros_gg"]:
     fmt[c] = pd.to_numeric(fmt[c], errors="coerce").fillna(0).astype(int)
 
 def _fmt_val_pct(pct, emoji):
-    if pd.isna(pct): 
+    if pd.isna(pct):
         return "—"
     return f"{emoji} {pct:.1f}%".replace(".", ",")
 
@@ -1138,7 +1152,6 @@ else:
         return PatternFill(fill_type=None)
 
     # Aplicar cores nas colunas %ERRO (G) e %ERRO_GG (H)
-    # Começa na linha 2 (linha 1 é o cabeçalho)
     for i, (_, r) in enumerate(fmt_sorted.iterrows(), start=2):
         fill_total = _fill_from_farol(r.get("FAROL_%ERRO"))
         fill_gg    = _fill_from_farol(r.get("FAROL_%ERRO_GG"))
@@ -1504,7 +1517,3 @@ else:
     df_fraude = df_fraude[cols_fraude].sort_values(["DATA","UNIDADE","VISTORIADOR"])
     st.dataframe(df_fraude, use_container_width=True, hide_index=True)
     st.caption('<div class="table-note">* Somente linhas cujo **ERRO** é exatamente “TENTATIVA DE FRAUDE”.</div>', unsafe_allow_html=True)
-
-
-
-
