@@ -163,30 +163,6 @@ def business_days_count(dini: date, dfim: date) -> int:
         return 0
     return len(pd.bdate_range(dini, dfim))
 
-# ---- slider seguro (impede valores fora do range no session_state) ----
-def safe_slider_int(label, key, min_value, max_value, default, step=1):
-    mi = int(min_value)
-    ma = int(max_value)
-    stp = max(1, int(step))
-
-    # Caso degenerado: range sem largura (ex.: 1..1) → não usar slider
-    if ma <= mi:
-        val = mi
-        st.session_state[key] = val  # mantém consistente entre reruns
-        # Mostra o valor “fixo” para o usuário
-        st.caption(f"**{label}:** {val}")
-        return val
-
-    # Normaliza o valor vindo do session_state
-    raw = st.session_state.get(key, default)
-    try:
-        cur = int(raw)
-    except Exception:
-        cur = int(default)
-
-    cur = int(max(mi, min(ma, cur)))
-    return st.slider(label, min_value=mi, max_value=ma, value=cur, step=stp, key=key)
-
 
 # ------------------ LEITURA DOS ÍNDICES (com cache) ------------------
 @st.cache_data(ttl=300, show_spinner=False)
@@ -424,9 +400,11 @@ s_mes_dates = pd.to_datetime(dfQ_mes["DATA"], errors="coerce").dt.date
 min_d, max_d = min(s_mes_dates.dropna()), max(s_mes_dates.dropna())
 col1, col2 = st.columns([1.2, 2.8])
 with col1:
-    drange = st.date_input("Período (dentro do mês)",
-                           value=(min_d, max_d), min_value=min_d, max_value=max_d,
-                           format="DD/MM/YYYY")
+    drange = st.date_input(
+        "Período (dentro do mês)",
+        value=(min_d, max_d), min_value=min_d, max_value=max_d,
+        format="DD/MM/YYYY"
+    )
 
 start_d, end_d = (drange if isinstance(drange, tuple) and len(drange)==2 else (min_d, max_d))
 mask_dias = s_mes_dates.map(lambda d: isinstance(d, date) and start_d <= d <= end_d)
@@ -541,7 +519,6 @@ mtd_all = dfQ[mask_mtd].copy()
 if "UNIDADE" in mtd_all.columns and len(f_unids):
     mtd_all = mtd_all[mtd_all["UNIDADE"].isin([_upper(u) for u in f_unids])]
 if "VISTORIADOR" in mtd_all.columns and len(f_vists):
-    # FIX: v em vez de u
     mtd_all = mtd_all[mtd_all["VISTORIADOR"].isin([_upper(v) for v in f_vists])]
 
 erros_mtd_total = int(len(mtd_all))
@@ -710,7 +687,7 @@ if start_d == end_d == today_local:
 
     st.caption(f"<span class='small'>{note_text}</span>", unsafe_allow_html=True)
 else:
-    st.info("Para ver o comparativo HOJE x ONTEM, selecione o **dia atual** no filtro de período.")
+    st.info("Para ver o comparativo HOJE x ONTEM, selecione o dia atual no filtro de período.")
 
 
 # ------------------ GRÁFICOS ------------------
@@ -730,59 +707,130 @@ c1, c2 = st.columns(2)
 if "UNIDADE" in viewQ.columns:
     with c1:
         st.markdown('<div class="section">🏙️ Erros por unidade</div>', unsafe_allow_html=True)
-        by_city = (
-            viewQ.groupby("UNIDADE", dropna=False)["ERRO"].size().reset_index(name="QTD")
-        )
-        if not viewP.empty and "UNIDADE" in viewP.columns:
-            prod_city = (
-                viewP.groupby("UNIDADE", dropna=False)["IS_REV"].size().reset_index(name="VIST")
-            )
-        else:
-            prod_city = pd.DataFrame(columns=["UNIDADE", "VIST"])
 
-        by_city = by_city.merge(prod_city, on="UNIDADE", how="left").fillna({"VIST": 0})
-        by_city["%ERRO"] = np.where(by_city["VIST"] > 0, (by_city["QTD"] / by_city["VIST"]) * 100, np.nan)
+        # duas colunas: TOTAL (à esquerda) e GG (à direita)
+        g_tot, g_gg = st.columns(2)
 
-        if by_city["%ERRO"].isna().all():
-            total_err = by_city["QTD"].sum()
-            by_city["%ERRO"] = np.where(total_err > 0, (by_city["QTD"] / total_err) * 100, np.nan)
-            y2_title = "% dos erros"
-        else:
-            y2_title = "% de erro (erros/vistorias)"
+        # ---------- TOTAL de erros por unidade ----------
+        with g_tot:
+            by_city = (
+                viewQ.groupby("UNIDADE", dropna=False)["ERRO"].size().reset_index(name="QTD")
+            )
 
-        by_city["PCT"] = by_city["%ERRO"] / 100.0
-        by_city = by_city.sort_values("QTD", ascending=False).reset_index(drop=True)
-        order = by_city["UNIDADE"].tolist()
+            if not viewP.empty and "UNIDADE" in viewP.columns:
+                prod_city = (
+                    viewP.groupby("UNIDADE", dropna=False)["IS_REV"].size().reset_index(name="VIST")
+                )
+            else:
+                prod_city = pd.DataFrame(columns=["UNIDADE", "VIST"])
 
-        bars = (
-            alt.Chart(by_city).mark_bar().encode(
-                x=alt.X("UNIDADE:N", sort=order, axis=alt.Axis(labelAngle=0, labelLimit=180), title="UNIDADE"),
-                y=alt.Y("QTD:Q", title="QTD"),
-                tooltip=["UNIDADE", "QTD", alt.Tooltip("PCT:Q", format=".1%", title=y2_title)],
+            by_city = by_city.merge(prod_city, on="UNIDADE", how="left").fillna({"VIST": 0})
+            by_city["%ERRO"] = np.where(by_city["VIST"] > 0, (by_city["QTD"] / by_city["VIST"]) * 100, np.nan)
+
+            if by_city["%ERRO"].isna().all():
+                total_err = by_city["QTD"].sum()
+                by_city["%ERRO"] = np.where(total_err > 0, (by_city["QTD"] / total_err) * 100, np.nan)
+                y2_title = "% dos erros"
+            else:
+                y2_title = "% de erro (erros/vistorias)"
+
+            by_city["PCT"] = by_city["%ERRO"] / 100.0
+            by_city = by_city.sort_values("QTD", ascending=False).reset_index(drop=True)
+            order = by_city["UNIDADE"].tolist()
+
+            bars = (
+                alt.Chart(by_city).mark_bar().encode(
+                    x=alt.X("UNIDADE:N", sort=order, axis=alt.Axis(labelAngle=0, labelLimit=180), title="UNIDADE"),
+                    y=alt.Y("QTD:Q", title="QTD"),
+                    tooltip=["UNIDADE", "QTD", alt.Tooltip("PCT:Q", format=".1%", title=y2_title)],
+                )
             )
-        )
-        bar_labels = (
-            alt.Chart(by_city).mark_text(dy=-6).encode(
-                x=alt.X("UNIDADE:N", sort=order),
-                y="QTD:Q",
-                text=alt.Text("QTD:Q", format=".0f"),
+            bar_labels = (
+                alt.Chart(by_city).mark_text(dy=-6).encode(
+                    x=alt.X("UNIDADE:N", sort=order),
+                    y="QTD:Q",
+                    text=alt.Text("QTD:Q", format=".0f"),
+                )
             )
-        )
-        line = (
-            alt.Chart(by_city).mark_line(point=True, color="#b02300").encode(
-                x=alt.X("UNIDADE:N", sort=order),
-                y=alt.Y("PCT:Q", axis=alt.Axis(title=y2_title, format=".1%")),
+            line = (
+                alt.Chart(by_city).mark_line(point=True, color="#b02300").encode(
+                    x=alt.X("UNIDADE:N", sort=order),
+                    y=alt.Y("PCT:Q", axis=alt.Axis(title=y2_title, format=".1%")),
+                )
             )
-        )
-        line_labels = (
-            alt.Chart(by_city).mark_text(color="#b02300", dy=-8, fontWeight="bold").encode(
-                x=alt.X("UNIDADE:N", sort=order),
-                y="PCT:Q",
-                text=alt.Text("PCT:Q", format=".1%"),
+            line_labels = (
+                alt.Chart(by_city).mark_text(color="#b02300", dy=-8, fontWeight="bold").encode(
+                    x=alt.X("UNIDADE:N", sort=order),
+                    y="PCT:Q",
+                    text=alt.Text("PCT:Q", format=".1%"),
+                )
             )
-        )
-        chart = alt.layer(bars, bar_labels, line, line_labels).resolve_scale(y="independent").properties(height=340)
-        st.altair_chart(chart, use_container_width=True)
+            chart = alt.layer(bars, bar_labels, line, line_labels).resolve_scale(y="independent").properties(height=340)
+            st.subheader("Total")
+            st.altair_chart(chart, use_container_width=True)
+
+        # ---------- Somente GRAVE + GRAVÍSSIMO por unidade ----------
+        with g_gg:
+            mask_gg = viewQ["GRAVIDADE"].astype(str).str.upper().isin(grav_gg) if "GRAVIDADE" in viewQ.columns else pd.Series(False, index=viewQ.index)
+            viewQ_gg = viewQ[mask_gg]
+
+            by_city_gg = (
+                viewQ_gg.groupby("UNIDADE", dropna=False)["ERRO"].size().reset_index(name="QTD_GG")
+            )
+
+            if not viewP.empty and "UNIDADE" in viewP.columns:
+                prod_city = (
+                    viewP.groupby("UNIDADE", dropna=False)["IS_REV"].size().reset_index(name="VIST")
+                )
+            else:
+                prod_city = pd.DataFrame(columns=["UNIDADE", "VIST"])
+
+            by_city_gg = by_city_gg.merge(prod_city, on="UNIDADE", how="left").fillna({"VIST": 0})
+
+            by_city_gg["%ERRO_GG"] = np.where(by_city_gg["VIST"] > 0,
+                                              (by_city_gg["QTD_GG"] / by_city_gg["VIST"]) * 100, np.nan)
+            if by_city_gg["%ERRO_GG"].isna().all():
+                total_gg_global = by_city_gg["QTD_GG"].sum()
+                by_city_gg["%ERRO_GG"] = np.where(total_gg_global > 0,
+                                                  (by_city_gg["QTD_GG"] / total_gg_global) * 100, np.nan)
+                y2_title_gg = "% dos erros GG"
+            else:
+                y2_title_gg = "% de erro GG (GG/vistorias)"
+
+            by_city_gg["PCT_GG"] = by_city_gg["%ERRO_GG"] / 100.0
+            by_city_gg = by_city_gg.sort_values("QTD_GG", ascending=False).reset_index(drop=True)
+            order_gg = by_city_gg["UNIDADE"].tolist()
+
+            bars_gg = (
+                alt.Chart(by_city_gg).mark_bar().encode(
+                    x=alt.X("UNIDADE:N", sort=order_gg, axis=alt.Axis(labelAngle=0, labelLimit=180), title="UNIDADE"),
+                    y=alt.Y("QTD_GG:Q", title="QTD (GG)"),
+                    tooltip=["UNIDADE", "QTD_GG", alt.Tooltip("PCT_GG:Q", format=".1%", title=y2_title_gg)],
+                )
+            )
+            bar_labels_gg = (
+                alt.Chart(by_city_gg).mark_text(dy=-6).encode(
+                    x=alt.X("UNIDADE:N", sort=order_gg),
+                    y="QTD_GG:Q",
+                    text=alt.Text("QTD_GG:Q", format=".0f"),
+                )
+            )
+            line_gg = (
+                alt.Chart(by_city_gg).mark_line(point=True, color="#b02300").encode(
+                    x=alt.X("UNIDADE:N", sort=order_gg),
+                    y=alt.Y("PCT_GG:Q", axis=alt.Axis(title=y2_title_gg, format=".1%")),
+                )
+            )
+            line_labels_gg = (
+                alt.Chart(by_city_gg).mark_text(color="#b02300", dy=-8, fontWeight="bold").encode(
+                    x=alt.X("UNIDADE:N", sort=order_gg),
+                    y="PCT_GG:Q",
+                    text=alt.Text("PCT_GG:Q", format=".1%"),
+                )
+            )
+            chart_gg = alt.layer(bars_gg, bar_labels_gg, line_gg, line_labels_gg).resolve_scale(y="independent").properties(height=340)
+            st.subheader("Grave + Gravíssimo")
+            st.altair_chart(chart_gg, use_container_width=True)
 
 if "GRAVIDADE" in viewQ.columns:
     with c2:
@@ -846,6 +894,7 @@ else:
 if not fast_mode:
     ex1, ex2 = st.columns(2)
 
+    # ===== PARETO (corrigido: caso 1 categoria não usa slider) =====
     with ex1:
         st.markdown('<div class="section">📈 Pareto de erros</div>', unsafe_allow_html=True)
 
@@ -853,17 +902,20 @@ if not fast_mode:
         if n_err == 0:
             st.info("Sem dados para montar o Pareto no período/filtros atuais.")
         else:
-            max_cats = int(min(30, n_err))
+            max_cats = min(30, n_err)
             if max_cats < 1:
                 st.info("Sem categorias suficientes para montar o Pareto.")
             else:
-                top_default = min(10, max_cats)
-                # ↓↓↓ slider seguro
-                top_cats = safe_slider_int(
-                    "Categorias no Pareto",
-                    key=f"pareto_cats_{ref_year}{ref_month}",
-                    min_value=1, max_value=max_cats, default=top_default, step=1
-                )
+                if max_cats <= 1:
+                    top_cats = 1
+                    st.caption("Categorias no Pareto: 1")
+                else:
+                    top_default = min(10, max_cats)
+                    top_cats = st.slider(
+                        "Categorias no Pareto",
+                        min_value=1, max_value=max_cats, value=top_default,
+                        step=1, key=f"pareto_cats_{ref_year}{ref_month}",
+                    )
 
                 pareto = (
                     viewQ.groupby("ERRO", sort=False)["ERRO"]
@@ -881,10 +933,12 @@ if not fast_mode:
                     total = pareto["QTD"].sum()
                     pareto["%ACUM"] = pareto["ACUM"] / total * 100
 
-                    x_enc = alt.X("ERRO:N",
-                                  sort=alt.SortField(field="QTD", order="descending"),
-                                  axis=alt.Axis(labelAngle=0, labelLimit=180),
-                                  title="ERRO")
+                    x_enc = alt.X(
+                        "ERRO:N",
+                        sort=alt.SortField(field="QTD", order="descending"),
+                        axis=alt.Axis(labelAngle=0, labelLimit=180),
+                        title="ERRO",
+                    )
 
                     bars = alt.Chart(pareto).mark_bar().encode(
                         x=x_enc,
@@ -900,39 +954,47 @@ if not fast_mode:
                         y=alt.Y("%ACUM:Q", title="% Acumulado"),
                         color=alt.value("#b02300"),
                     )
-                    line_labels = alt.Chart(pareto).mark_text(
-                        dy=-8, baseline="bottom", color="#b02300", fontWeight="bold"
-                    ).encode(
-                        x=x_enc, y="%ACUM:Q", text=alt.Text("%ACUM:Q", format=".1f")
+                    line_labels = (
+                        alt.Chart(pareto)
+                        .mark_text(dy=-8, baseline="bottom", color="#b02300", fontWeight="bold")
+                        .encode(x=x_enc, y="%ACUM:Q", text=alt.Text("%ACUM:Q", format=".1f"))
                     )
 
-                    chart_pareto = alt.layer(bars, bar_labels, line, line_labels)\
-                                       .resolve_scale(y='independent')\
-                                       .properties(height=360)
+                    chart_pareto = (
+                        alt.layer(bars, bar_labels, line, line_labels)
+                        .resolve_scale(y="independent")
+                        .properties(height=360)
+                    )
                     st.altair_chart(chart_pareto, use_container_width=True)
 
                     max_topN = int(len(pareto))
-                    # ↓↓↓ slider seguro
-                    topN_sim = safe_slider_int(
-                        "Quantos erros do topo considerar?",
-                        key=f"pareto_topN_{ref_year}{ref_month}",
-                        min_value=1, max_value=max_topN, default=min(8, max_topN), step=1
-                    )
-                    # ↓↓↓ slider seguro (range fixo mas padronizamos)
-                    reducao = safe_slider_int(
-                        "Redução esperada nesses erros (%)",
-                        key=f"pareto_reducao_{ref_year}{ref_month}",
-                        min_value=0, max_value=100, default=25, step=1
-                    )
+                    if max_topN <= 1:
+                        topN_sim = 1
+                        st.caption("Top considerado: 1")
+                        reducao = st.slider(
+                            "Redução esperada nesses erros (%)",
+                            min_value=0, max_value=100, value=25,
+                            key=f"pareto_reducao_{ref_year}{ref_month}",
+                        )
+                    else:
+                        topN_sim = st.slider(
+                            "Quantos erros do topo considerar?",
+                            min_value=1, max_value=max_topN, value=min(8, max_topN),
+                            key=f"pareto_topN_{ref_year}{ref_month}",
+                        )
+                        reducao = st.slider(
+                            "Redução esperada nesses erros (%)",
+                            min_value=0, max_value=100, value=25,
+                            key=f"pareto_reducao_{ref_year}{ref_month}",
+                        )
 
                     idx = min(topN_sim, max_topN) - 1
                     frac = float(pareto["%ACUM"].iloc[idx]) / 100.0
                     queda_total = frac * (reducao / 100.0) * 100.0
 
                     st.info(
-                        f"Os **Top {topN_sim}** explicam **{frac*100:.1f}%** do total. "
-                        f"Se você reduzir esses erros em **{reducao}%**, "
-                        f"o total cai cerca de **{queda_total:.1f}%**."
+                        f"Os Top {topN_sim} explicam {frac*100:.1f}% do total. "
+                        f"Se reduzir esses erros em {reducao}%, o total cai cerca de {queda_total:.1f}%."
                     )
 
     with ex2:
@@ -1029,8 +1091,8 @@ with col_dir:
 st.markdown('<div class="section">📅 Erros por dia da semana</div>', unsafe_allow_html=True)
 dow_map = {0:"Seg",1:"Ter",2:"Qua",3:"Qui",4:"Sex",5:"Sáb",6:"Dom"}
 dow = pd.to_datetime(viewQ["DATA"], errors="coerce").dt.dayofweek.map(dow_map)
-dow_df = pd.DataFrame({"DIA": dow}).value_counts().reset_index(name="QTD").rename(columns={"index":"DIA"})
-dow_df = dow_df.sort_index() if "DIA" not in dow_df.columns else dow_df
+dow_counts = dow.value_counts().reindex(list(dow_map.values()), fill_value=0)
+dow_df = pd.DataFrame({"DIA": dow_counts.index, "QTD": dow_counts.values})
 if not dow_df.empty:
     st.altair_chart(bar_with_labels(dow_df, "DIA", "QTD", x_title="DIA DA SEMANA"),
                     use_container_width=True)
@@ -1110,7 +1172,7 @@ for c in ["vist","rev","liq","erros","erros_gg"]:
     fmt[c] = pd.to_numeric(fmt[c], errors="coerce").fillna(0).astype(int)
 
 def _fmt_val_pct(pct, emoji):
-    if pd.isna(pct):
+    if pd.isna(pct): 
         return "—"
     return f"{emoji} {pct:.1f}%".replace(".", ",")
 
@@ -1158,11 +1220,11 @@ else:
     # Função para pintar células conforme o farol
     def _fill_from_farol(emoji: str) -> PatternFill:
         if isinstance(emoji, str) and "🟢" in emoji:
-            return PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")  # verde
+            return PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
         if isinstance(emoji, str) and "🟡" in emoji:
-            return PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")  # amarelo
+            return PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
         if isinstance(emoji, str) and "🔴" in emoji:
-            return PatternFill(start_color="F4CCCC", end_color="F4CCCC", fill_type="solid")  # vermelho
+            return PatternFill(start_color="F4CCCC", end_color="F4CCCC", fill_type="solid")
         return PatternFill(fill_type=None)
 
     # Aplicar cores nas colunas %ERRO (G) e %ERRO_GG (H)
@@ -1176,12 +1238,10 @@ else:
         ws[f"G{i}"].alignment = Alignment(horizontal="center")
         ws[f"H{i}"].alignment = Alignment(horizontal="center")
 
-    # Largura das colunas
     widths = {"A":28, "B":10, "C":10, "D":10, "E":10, "F":10, "G":12, "H":12}
     for col, w in widths.items():
         ws.column_dimensions[col].width = w
 
-    # Salvar em memória e criar botão
     xbuf = io.BytesIO()
     wb.save(xbuf)
     xbuf.seek(0)
@@ -1201,8 +1261,7 @@ with st.expander("Legenda do farol", expanded=False):
 
 if fallback_note:
     st.caption(f"ℹ️ {fallback_note}")
-
-
+    
 # ------------------ TENDÊNCIA DE ERROS (projeção) ------------------
 st.markdown("---")
 st.markdown('<div class="section">📈 Tendência de erros (projeção até o fim do mês)</div>', unsafe_allow_html=True)
@@ -1314,8 +1373,8 @@ tab_fmt = tab.copy()
 tab_fmt["VAR_%"] = tab_fmt["VAR_%"].map(lambda x: "—" if pd.isna(x) else f"{x:.1f}%".replace(".", ","))
 
 st.caption(
-    f"Período atual: **{periodo_atual_ini:%d/%m/%Y} – {periodo_atual_fim:%d/%m/%Y}**  •  "
-    f"Período anterior: **{prev_ini:%d/%m/%Y} – {prev_fim:%d/%m/%Y}**"
+    f"Período atual: {periodo_atual_ini:%d/%m/%Y} – {periodo_atual_fim:%d/%m/%Y}  •  "
+    f"Período anterior: {prev_ini:%d/%m/%Y} – {prev_fim:%d/%m/%Y}"
 )
 st.dataframe(
     tab_fmt.sort_values("ERROS_ATUAL", ascending=False)[
@@ -1475,9 +1534,9 @@ if not fast_mode:
 
         legend_parts = []
         for i, (prefix, di, dfim) in enumerate(meta, start=1):
-            label = f"**Semana {i}**: {di:%d/%m}–{dfim:%d/%m}"
+            label = f"Semana {i}: {di:%d/%m}–{dfim:%d/%m}"
             if i == k:
-                label = label.replace(f"**Semana {i}**", f"**Semana {i} (atual)**")
+                label = label.replace(f"Semana {i}", f"Semana {i} (atual)")
             legend_parts.append(label)
         st.caption("  ·  ".join(legend_parts))
 
@@ -1487,35 +1546,28 @@ if not fast_mode:
 st.markdown("---")
 st.markdown('<div class="section">🏁 Top 5 melhores × piores (por % de erro)</div>', unsafe_allow_html=True)
 
-rank = base.copy()
+rank = (base.copy())
+rank = rank[den > 0].replace({np.inf: np.nan}).dropna(subset=["%ERRO"])
 
-# escolha do denominador coerente com o rádio
 den_col = "liq" if denom_mode.startswith("Líquida") else "vist"
-rank = rank[rank[den_col] > 0].replace({np.inf: np.nan}).dropna(subset=["%ERRO"])
-
-col_titulo_den = "vistorias líquidas" if den_col == "liq" else "vistorias"
+col_titulo_den = "vistórias líquidas" if den_col == "liq" else "vistórias"
 cols_rank = ["VISTORIADOR", den_col, "erros", "%ERRO", "%ERRO_GG"]
+rank_view = rank[cols_rank].rename(columns={den_col: col_titulo_den})
 
-# ordene usando a coluna numérica %ERRO (sem formatação)
-best5_num  = rank.sort_values("%ERRO", ascending=True).head(5)[cols_rank].rename(columns={den_col: col_titulo_den})
-worst5_num = rank.sort_values("%ERRO", ascending=False).head(5)[cols_rank].rename(columns={den_col: col_titulo_den})
-
-# formatação APÓS a ordenação
-def _fmt(df):
-    out = df.copy()
-    for c in [col_titulo_den, "erros"]:
-        if c in out.columns: out[c] = out[c].astype(int)
-    for c in ["%ERRO", "%ERRO_GG"]:
-        if c in out.columns: out[c] = out[c].map(lambda x: f"{x:.1f}%".replace(".", ",") if pd.notna(x) else "—")
-    return out.reset_index(drop=True)
+for c in [col_titulo_den, "erros"]:
+    if c in rank_view.columns: rank_view[c] = rank_view[c].astype(int)
+for c in ["%ERRO", "%ERRO_GG"]:
+    if c in rank_view.columns: rank_view[c] = rank_view[c].map(lambda x: f"{x:.1f}%" if pd.notna(x) else "—")
 
 c_best, c_worst = st.columns(2)
 with c_best:
+    best5  = rank_view.sort_values("%ERRO", ascending=True).head(5)
     st.subheader("🏆 Top 5 melhores (menor %Erro)")
-    st.dataframe(_fmt(best5_num), use_container_width=True, hide_index=True)
+    st.dataframe(best5.reset_index(drop=True), use_container_width=True, hide_index=True)
 with c_worst:
+    worst5 = rank_view.sort_values("%ERRO", ascending=False).head(5)
     st.subheader("⚠️ Top 5 piores (maior %Erro)")
-    st.dataframe(_fmt(worst5_num), use_container_width=True, hide_index=True)
+    st.dataframe(worst5.reset_index(drop=True), use_container_width=True, hide_index=True)
 
 # ------------------ FRAUDE ------------------
 st.markdown("---")
@@ -1523,12 +1575,12 @@ st.markdown('<div class="section">🚨 Tentativa de Fraude — Detalhamento</div
 fraude_mask = viewQ["ERRO"].astype(str).str.upper().str.contains(r"\bTENTATIVA DE FRAUDE\b", na=False)
 df_fraude = viewQ[fraude_mask].copy()
 if df_fraude.empty:
-    st.info("Nenhum registro de **Tentativa de Fraude** no período/filtros selecionados.")
+    st.info("Nenhum registro de Tentativa de Fraude no período/filtros selecionados.")
 else:
     cols_fraude = ["DATA","UNIDADE","VISTORIADOR","PLACA","ERRO","GRAVIDADE","ANALISTA","OBS"]
     for c in cols_fraude:
         if c not in df_fraude.columns: df_fraude[c] = ""
     df_fraude = df_fraude[cols_fraude].sort_values(["DATA","UNIDADE","VISTORIADOR"])
     st.dataframe(df_fraude, use_container_width=True, hide_index=True)
-    st.caption('<div class="table-note">* Somente linhas cujo **ERRO** é exatamente “TENTATIVA DE FRAUDE”.</div>', unsafe_allow_html=True)
+    st.caption('<div class="table-note">* Somente linhas cujo ERRO é exatamente “TENTATIVA DE FRAUDE”.</div>', unsafe_allow_html=True)
 
